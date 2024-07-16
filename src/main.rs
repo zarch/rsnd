@@ -133,12 +133,6 @@ fn download_audio(metadata: &AudioMetadata, folder: &Path, idx: usize) -> Result
     let sanitized_title = re.replace_all(&metadata.title, "_").to_lowercase();
     let output_path = folder.join(format!("{:03} - {}.mp3", idx, sanitized_title));
 
-    if let Some(folder_path) = output_path.parent() {
-        create_dir_all(folder_path).with_context(|| {
-            format!("Failed to create parent folder: {}", folder_path.display())
-        })?;
-    };
-
     if output_path.exists() {
         println!(
             "File {} already exists. Skipping download.",
@@ -170,7 +164,22 @@ fn download_audio(metadata: &AudioMetadata, folder: &Path, idx: usize) -> Result
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    create_dir_all(&args.folder).with_context(|| {
+        format!(
+            "Failed to create folder directory: {}. Error: {:?}",
+            &args.folder.display(),
+            std::io::Error::last_os_error()
+        )
+    })?;
+
     let cache_dir = PathBuf::from(&args.cache);
+    create_dir_all(&cache_dir).with_context(|| {
+        format!(
+            "Failed to create cache directory: {}. Error: {:?}",
+            cache_dir.display(),
+            std::io::Error::last_os_error()
+        )
+    })?;
 
     let html_content = fetch_or_read_page(&args.url, &cache_dir)?;
 
@@ -196,13 +205,13 @@ mod tests {
     fn test_fetch_or_read_page() -> Result<()> {
         let url = "https://example.com";
         let cache_dir = std::env::temp_dir().join("test_cache");
-        create_dir_all(&cache_dir)?;
 
         let result = fetch_or_read_page(url, &cache_dir);
         assert!(result.is_ok());
 
         // Check that the file was cached
-        let filename = format!("{}.html", base64::encode(url));
+        let (_, rawfilename) = url.rsplit_once('/').unwrap();
+        let filename = format!("{}.html", rawfilename);
         let filepath = cache_dir.join(filename);
         assert!(filepath.exists());
 
@@ -221,7 +230,6 @@ mod tests {
     fn test_fetch_audio_metadata() -> Result<()> {
         let url = "/audio/2015/06/I-tre-moschettieri---Lettura-I-2c45793e-a289-42a8-97ae-656a2a94a71f.json";
         let cache_dir = std::env::temp_dir().join("test_cache");
-        create_dir_all(&cache_dir)?;
 
         let metadata = fetch_audio_metadata(url, &cache_dir)?;
         assert!(!metadata.url.is_empty());
@@ -237,7 +245,6 @@ mod tests {
             title: "Test Audio".to_string(),
         };
         let folder = std::env::temp_dir().join("test_audio");
-        create_dir_all(&folder)?;
 
         let result = download_audio(&metadata, &folder, 1);
         assert!(result.is_ok());
