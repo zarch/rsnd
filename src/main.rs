@@ -205,6 +205,7 @@ mod tests {
     fn test_fetch_or_read_page() -> Result<()> {
         let url = "https://example.com";
         let cache_dir = std::env::temp_dir().join("test_cache");
+        create_dir_all(&cache_dir)?;
 
         let result = fetch_or_read_page(url, &cache_dir);
         assert!(result.is_ok());
@@ -230,6 +231,7 @@ mod tests {
     fn test_fetch_audio_metadata() -> Result<()> {
         let url = "/audio/2015/06/I-tre-moschettieri---Lettura-I-2c45793e-a289-42a8-97ae-656a2a94a71f.json";
         let cache_dir = std::env::temp_dir().join("test_cache");
+        create_dir_all(&cache_dir)?;
 
         let metadata = fetch_audio_metadata(url, &cache_dir)?;
         assert!(!metadata.url.is_empty());
@@ -245,6 +247,7 @@ mod tests {
             title: "Test Audio".to_string(),
         };
         let folder = std::env::temp_dir().join("test_audio");
+        create_dir_all(&folder)?;
 
         let result = download_audio(&metadata, &folder, 1);
         assert!(result.is_ok());
