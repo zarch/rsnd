@@ -1,31 +1,4 @@
 # rsnd
-Raiplay sound CLI client
-
-
-## Usage
-
-```bash
-❯ rsnd --help
-Usage: rsnd [OPTIONS] --url <URL>
-
-Options:
-  -u, --url <URL>        URL of the HTML page
-  -f, --folder <FOLDER>  Path to the local folder [default: .]
-  -c, --cache <CACHE>    Path to the cache folder [default: /tmp]
-  -h, --help             Print help
-  -V, --version          Print version
-```
-
-Here an example:
-
-```bash
-❯ ./target/debug/rsnd --url https://www.raiplaysound.it/audiolibri/itremoschettieri \
---folder=libri/itremoschettieri \
---cache=cache
-```
----
-
-# rsnd
 Raiplay Sound CLI Client
 
 `rsnd` is a command-line tool designed to download audio content from Raiplay Sound.
