@@ -36,8 +36,11 @@ struct AudioMetadata {
 
 /// Fetches the HTML content from the URL or reads it from the cache if available.
 fn fetch_or_read_page(url: &str, cache_dir: &Path) -> Result<String> {
-    let filename = format!("{}.html", base64::encode(url));
-    let filepath = cache_dir.join(&filename);
+    let (_, rawfilename) = url
+        .rsplit_once('/')
+        .with_context(|| format!("Failed to extract page name from: {}", url))?;
+    let filename = format!("{}.html", rawfilename);
+    let filepath = cache_dir.join(filename);
 
     if filepath.exists() {
         let mut file = File::open(&filepath)
@@ -82,8 +85,10 @@ fn extract_options(html: &str) -> Vec<String> {
 /// Fetches audio metadata from the given URL or reads it from the cache if available.
 fn fetch_audio_metadata(url: &str, cache_dir: &Path) -> Result<AudioMetadata> {
     let full_url = format!("{}{}", URL_BASE, url);
-    let filename = format!("{}.json", base64::encode(&full_url));
-    let filepath = cache_dir.join(&filename);
+    let (_, filename) = full_url
+        .rsplit_once('/')
+        .with_context(|| format!("Failed to extract file name from: {}", full_url))?;
+    let filepath = cache_dir.join(filename);
 
     let json_content = if filepath.exists() {
         let mut file = File::open(&filepath)
@@ -198,7 +203,7 @@ mod tests {
 
         // Check that the file was cached
         let filename = format!("{}.html", base64::encode(url));
-        let filepath = cache_dir.join(&filename);
+        let filepath = cache_dir.join(filename);
         assert!(filepath.exists());
 
         Ok(())

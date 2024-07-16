@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+    - id: check-byte-order-marker
+    - id: check-case-conflict
+    - id: check-merge-conflict
+    - id: check-symlinks
+    - id: check-yaml
+    - id: check-json
+    - id: check-toml
+    - id: pretty-format-json
+      args:
+         - --autofix
+         - --no-ensure-ascii
+         - --no-sort-keys
+    - id: end-of-file-fixer
+    - id: mixed-line-ending
+    - id: trailing-whitespace
+
+  - repo: https://github.com/pre-commit/pre-commit
+    rev: v3.7.1
+    hooks:
+    -   id: validate_manifest
+
+  - repo: https://github.com/kajmaj87/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+      - id: clippy
+        name: clippy
+        entry: cargo clippy --all-targets --all-features
+        language: system
+        types: [rust]
+      - id: cargo-test
+        name: cargo-test
+        entry: cargo test --all
+        language: system
+        types: [rust]
+      - id: cargo-check
+        name: cargo check
+        description: Check the package for errors.
+        entry: cargo check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+  - repo: https://github.com/crate-ci/typos
+    rev: typos-v0.10.26
+    hooks:
+      - id: typos
