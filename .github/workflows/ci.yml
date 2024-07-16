@@ -109,4 +109,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.platform }}-binary
-          path: target/release/raidl
+          path: target/release/rsnd
