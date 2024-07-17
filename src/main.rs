@@ -1,13 +1,16 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use regex::Regex;
-use reqwest::blocking::get;
+use reqwest::header::HeaderMap;
+use reqwest::Client;
 use scraper::{Html, Selector};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use tokio::fs::File as TokioFile;
+use tokio::io::AsyncWriteExt;
 
 static URL_BASE: &str = "https://www.raiplaysound.it";
 
@@ -35,7 +38,7 @@ struct AudioMetadata {
 }
 
 /// Fetches the HTML content from the URL or reads it from the cache if available.
-fn fetch_or_read_page(url: &str, cache_dir: &Path) -> Result<String> {
+async fn fetch_or_read_page(client: &Client, url: &str, cache_dir: &Path) -> Result<String> {
     let (_, rawfilename) = url
         .rsplit_once('/')
         .with_context(|| format!("Failed to extract page name from: {}", url))?;
@@ -50,15 +53,31 @@ fn fetch_or_read_page(url: &str, cache_dir: &Path) -> Result<String> {
             .with_context(|| format!("Failed to read file: {}", filepath.display()))?;
         Ok(contents)
     } else {
-        let response = get(url)
-            .with_context(|| format!("Failed to fetch URL: {}", url))?
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to fetch URL: {}", url))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to fetch URL: {}. Status: {}",
+                url,
+                response.status()
+            ));
+        }
+
+        let rsp_txt = response
             .text()
+            .await
             .with_context(|| format!("Failed to get text from URL: {}", url))?;
-        let mut file = File::create(&filepath)
+        let mut file = TokioFile::create(&filepath)
+            .await
             .with_context(|| format!("Failed to create file: {}", filepath.display()))?;
-        file.write_all(response.as_bytes())
+        file.write_all(rsp_txt.as_bytes())
+            .await
             .with_context(|| format!("Failed to write to file: {}", filepath.display()))?;
-        Ok(response)
+        Ok(rsp_txt)
     }
 }
 
@@ -83,7 +102,11 @@ fn extract_options(html: &str) -> Vec<String> {
 }
 
 /// Fetches audio metadata from the given URL or reads it from the cache if available.
-fn fetch_audio_metadata(url: &str, cache_dir: &Path) -> Result<AudioMetadata> {
+async fn fetch_audio_metadata(
+    client: &Client,
+    url: &str,
+    cache_dir: &Path,
+) -> Result<AudioMetadata> {
     let full_url = format!("{}{}", URL_BASE, url);
     let (_, filename) = full_url
         .rsplit_once('/')
@@ -98,20 +121,35 @@ fn fetch_audio_metadata(url: &str, cache_dir: &Path) -> Result<AudioMetadata> {
             .with_context(|| format!("Failed to read file: {}", filepath.display()))?;
         contents
     } else {
-        let response = get(&full_url)
-            .with_context(|| format!("Failed to fetch URL: {}", full_url))?
+        let response = client
+            .get(&full_url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to fetch URL: {}", full_url))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to fetch URL: {}. Status: {}",
+                full_url,
+                response.status()
+            ));
+        }
+
+        let rsp_txt = response
             .text()
+            .await
             .with_context(|| format!("Failed to get text from URL: {}", full_url))?;
-        let mut file = File::create(&filepath)
+        let mut file = TokioFile::create(&filepath)
+            .await
             .with_context(|| format!("Failed to create file: {}", filepath.display()))?;
-        file.write_all(response.as_bytes())
+        file.write_all(rsp_txt.as_bytes())
+            .await
             .with_context(|| format!("Failed to write to file: {}", filepath.display()))?;
-        response
+        rsp_txt
     };
 
     let json_value: Value = serde_json::from_str(&json_content)
         .with_context(|| format!("Failed to parse JSON: {}", full_url))?;
-
     let audio_url = json_value["audio"]["url"]
         .as_str()
         .context("Missing field `url`")?
@@ -128,7 +166,12 @@ fn fetch_audio_metadata(url: &str, cache_dir: &Path) -> Result<AudioMetadata> {
 }
 
 /// Downloads audio from the given metadata and saves it to the specified folder.
-fn download_audio(metadata: &AudioMetadata, folder: &Path, idx: usize) -> Result<()> {
+async fn download_audio(
+    client: &Client,
+    metadata: &AudioMetadata,
+    folder: &Path,
+    idx: usize,
+) -> Result<()> {
     let re = Regex::new(r"[^\w\s-]")?;
     let sanitized_title = re.replace_all(&metadata.title, "_").to_lowercase();
     let output_path = folder.join(format!("{:03} - {}.mp3", idx, sanitized_title));
@@ -141,27 +184,72 @@ fn download_audio(metadata: &AudioMetadata, folder: &Path, idx: usize) -> Result
         return Ok(());
     }
 
-    let response = get(&metadata.url)
+    let response = client
+        .get(&metadata.url)
+        .send()
+        .await
         .with_context(|| format!("Failed to fetch audio URL: {}", metadata.url))?;
-    let mut file = File::create(&output_path).with_context(|| {
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch audio URL: {}. Status: {}",
+            metadata.url,
+            response.status()
+        ));
+    }
+
+    let mut file = TokioFile::create(&output_path).await.with_context(|| {
         format!(
             "Failed to create file: {}. Error: {:?}",
             output_path.display(),
             std::io::Error::last_os_error()
         )
     })?;
-    file.write_all(&response.bytes()?).with_context(|| {
-        format!(
-            "Failed to write to file: {}. Error: {:?}",
-            output_path.display(),
-            std::io::Error::last_os_error()
-        )
-    })?;
+    file.write_all(&response.bytes().await?)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to write to file: {}. Error: {:?}",
+                output_path.display(),
+                std::io::Error::last_os_error()
+            )
+        })?;
     println!("Downloaded {} to {}", metadata.title, output_path.display());
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn get_client() -> Result<Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8".parse().unwrap());
+    headers.insert("accept-language", "en-US,en;q=0.7".parse().unwrap());
+    headers.insert("priority", "u=0, i".parse().unwrap());
+    headers.insert(
+        "sec-ch-ua",
+        "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Brave\";v=\"126\""
+            .parse()
+            .unwrap(),
+    );
+    headers.insert("sec-ch-ua-mobile", "?0".parse().unwrap());
+    headers.insert("sec-ch-ua-platform", "\"Linux\"".parse().unwrap());
+    headers.insert("sec-fetch-dest", "document".parse().unwrap());
+    headers.insert("sec-fetch-mode", "navigate".parse().unwrap());
+    headers.insert("sec-fetch-site", "none".parse().unwrap());
+    headers.insert("sec-fetch-user", "?1".parse().unwrap());
+    headers.insert("sec-gpc", "1".parse().unwrap());
+    headers.insert("upgrade-insecure-requests", "1".parse().unwrap());
+    headers.insert("user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36".parse().unwrap());
+
+    let client = Client::builder()
+        .default_headers(headers.clone())
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .cookie_store(true)
+        .build()
+        .context("Failed to build HTTP client")?;
+    Ok(client)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     create_dir_all(&args.folder).with_context(|| {
@@ -181,17 +269,20 @@ fn main() -> Result<()> {
         )
     })?;
 
-    let html_content = fetch_or_read_page(&args.url, &cache_dir)?;
+    let client = get_client().with_context(|| {
+        format!(
+            "Failed to create the reqwest client. Error: {:?}",
+            std::io::Error::last_os_error()
+        )
+    })?;
 
-    for (idx, url) in extract_options(&html_content).into_iter().enumerate() {
-        match fetch_audio_metadata(&url, &cache_dir) {
-            Ok(metadata) => {
-                if let Err(e) = download_audio(&metadata, &args.folder, idx) {
-                    eprintln!("Failed to download audio: {}", e);
-                }
-            }
-            Err(e) => eprintln!("Failed to fetch audio metadata: {}", e),
-        }
+    let page_html = fetch_or_read_page(&client, &args.url, &cache_dir).await?;
+
+    let audio_urls = extract_options(&page_html);
+
+    for (idx, audio_url) in audio_urls.iter().enumerate() {
+        let metadata = fetch_audio_metadata(&client, audio_url, &cache_dir).await?;
+        download_audio(&client, &metadata, &args.folder, idx + 1).await?;
     }
 
     Ok(())
@@ -200,21 +291,36 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env::temp_dir;
+    use std::fs::File;
+    use std::io::Write;
+    use tokio::fs::{create_dir_all, remove_file};
 
-    #[test]
-    fn test_fetch_or_read_page() -> Result<()> {
-        let url = "https://example.com";
-        let cache_dir = std::env::temp_dir().join("test_cache");
-        create_dir_all(&cache_dir)?;
+    #[tokio::test]
+    async fn test_fetch_or_read_page() -> Result<()> {
+        let url = "https://www.raiplaysound.it/audiolibri/itremoschettieri";
+        let cache_dir = temp_dir().join("test_cache");
+        create_dir_all(&cache_dir).await?;
 
-        let result = fetch_or_read_page(url, &cache_dir);
+        let client = get_client()?;
+
+        // Pulire il file di cache se esiste
+        let cache_file = cache_dir.join("itremoschettieri.html");
+        if cache_file.exists() {
+            remove_file(&cache_file).await?;
+        }
+
+        let result = fetch_or_read_page(&client, url, &cache_dir).await;
         assert!(result.is_ok());
 
         // Check that the file was cached
-        let (_, rawfilename) = url.rsplit_once('/').unwrap();
-        let filename = format!("{}.html", rawfilename);
-        let filepath = cache_dir.join(filename);
+        let filepath = cache_dir.join("itremoschettieri.html");
         assert!(filepath.exists());
+
+        // Pulire il file di cache
+        if filepath.exists() {
+            remove_file(&filepath).await?;
+        }
 
         Ok(())
     }
@@ -227,29 +333,57 @@ mod tests {
         assert_eq!(options[0], "audio/2015/06/I-tre-moschettieri---Lettura-I-2c45793e-a289-42a8-97ae-656a2a94a71f.json");
     }
 
-    #[test]
-    fn test_fetch_audio_metadata() -> Result<()> {
+    #[tokio::test]
+    async fn test_fetch_audio_metadata() -> Result<()> {
         let url = "/audio/2015/06/I-tre-moschettieri---Lettura-I-2c45793e-a289-42a8-97ae-656a2a94a71f.json";
-        let cache_dir = std::env::temp_dir().join("test_cache");
-        create_dir_all(&cache_dir)?;
+        let cache_dir = temp_dir().join("test_cache");
+        create_dir_all(&cache_dir).await?;
 
-        let metadata = fetch_audio_metadata(url, &cache_dir)?;
-        assert!(!metadata.url.is_empty());
-        assert!(!metadata.title.is_empty());
+        // Simula la risposta JSON per il test
+        let json_response = r#"
+        {
+            "audio": {
+                "title": "I tre moschettieri - Lettura I",
+                "url": "https://mediapolisvod.rai.it/relinker/relinkerServlet.htm?cont=jmC2BrdAhSIeeqqEEqual",
+                "type": "audio",
+                "duration": "00:19:15"
+            }
+        }
+        "#;
+        let cache_file = cache_dir
+            .join("I-tre-moschettieri---Lettura-I-2c45793e-a289-42a8-97ae-656a2a94a71f.json");
+        let mut file = File::create(&cache_file)?;
+        file.write_all(json_response.as_bytes())?;
+
+        let client = get_client()?;
+
+        let metadata = fetch_audio_metadata(&client, url, &cache_dir).await?;
+        assert_eq!(
+            metadata.url,
+            "https://mediapolisvod.rai.it/relinker/relinkerServlet.htm?cont=jmC2BrdAhSIeeqqEEqual"
+        );
+        assert_eq!(metadata.title, "I tre moschettieri - Lettura I");
+
+        // Pulire il file di cache
+        if cache_file.exists() {
+            remove_file(&cache_file).await?;
+        }
 
         Ok(())
     }
 
-    #[test]
-    fn test_download_audio() -> Result<()> {
+    #[tokio::test]
+    async fn test_download_audio() -> Result<()> {
         let metadata = AudioMetadata {
             url: "https://mediapolisvod.rai.it/relinker/relinkerServlet.htm?cont=jmC2BrdAhSIeeqqEEqual".to_string(),
             title: "Test Audio".to_string(),
         };
-        let folder = std::env::temp_dir().join("test_audio");
-        create_dir_all(&folder)?;
+        let folder = temp_dir().join("test_audio");
+        create_dir_all(&folder).await?;
 
-        let result = download_audio(&metadata, &folder, 1);
+        let client = get_client()?;
+
+        let result = download_audio(&client, &metadata, &folder, 1).await;
         assert!(result.is_ok());
 
         let re = Regex::new(r"[^\w\s-]")?;
@@ -257,6 +391,11 @@ mod tests {
         let output_path = folder.join(format!("{:03} - {}.mp3", 1, sanitized_title));
 
         assert!(output_path.exists());
+
+        // Pulire il file audio
+        if output_path.exists() {
+            remove_file(&output_path).await?;
+        }
 
         Ok(())
     }

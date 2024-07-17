@@ -5,15 +5,15 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
-reqwest = { version = "0.11", features = ["blocking"] }
+reqwest = { version = "0.11", features = ["json", "cookies"] }
 scraper = "0.19.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.13.0"
 regex = "1.5.4"
 anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+
 
 [dev-dependencies]
-# rustfmt = "1.4.37"
-# clippy = "0.1.55"
 grcov = "0.8.11"
